@@ -80,12 +80,37 @@ class ConvNet(nn.Module):
 class Net(nn.Module):
     '''
     Build the best MNIST classifier.
+    Need to update
     '''
     def __init__(self):
         super(Net, self).__init__()
-
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=8, kernel_size=(3,3), stride=1)
+        self.conv2 = nn.Conv2d(8, 8, 3, 1)
+        self.dropout1 = nn.Dropout2d(0.6)
+        self.dropout2 = nn.Dropout2d(0.3)
+        self.fc1 = nn.Linear(200, 88)
+        self.fc2 = nn.Linear(88, 10)
+        self.AP = nn.AvgPool2d((3,3), stride = 1)
+        
     def forward(self, x):
-        return x
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout1(x)
+
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout2(x)
+
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+
+        output = F.log_softmax(x, dim=1)
+        
+        return output
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
@@ -175,7 +200,7 @@ def main():
         model = fcNet().to(device)
         model.load_state_dict(torch.load(args.load_model))
 
-        test_dataset = datasets.MNIST('../data', train=False,
+        test_dataset = datasets.MNIST('./data', train=False,
                     transform=transforms.Compose([
                         transforms.ToTensor(),
                         transforms.Normalize((0.1307,), (0.3081,))
@@ -189,9 +214,10 @@ def main():
         return
 
     # Pytorch has default MNIST dataloader which loads data at each iteration
-    train_dataset = datasets.MNIST('../data', train=True, download=True,
+    train_dataset = datasets.MNIST('./data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
                     transforms.ToTensor(),           # Add data augmentation here
+                    transforms.RandomPerspective(distortion_scale=0.2, p=0.1, interpolation= 2, fill=0),
                     transforms.Normalize((0.1307,), (0.3081,))
                 ]))
 
@@ -199,8 +225,26 @@ def main():
     # training by using SubsetRandomSampler. Right now the train and validation
     # sets are built from the same indices - this is bad! Change it so that
     # the training and validation sets are disjoint and have the correct relative sizes.
-    subset_indices_train = range(len(train_dataset))
-    subset_indices_valid = range(len(train_dataset))
+    '''
+    split into train and validation set
+    '''
+    p_val = 0.15
+    train_sort = [[],[],[],[],[],[],[],[],[],[]] #to store inds by label
+    ind = 0
+    for img in train_dataset:
+        train_sort[img[1]].append(ind)
+        ind += 1
+    
+    validation_inds = []
+    train_inds = []
+    for lst in range(10):
+        rand_sort = list(torch.utils.data.SubsetRandomSampler(train_sort[lst]))
+        num_val = int(len(rand_sort) * p_val)
+        validation_inds += rand_sort[:num_val]
+        train_inds += rand_sort[num_val:]
+        
+    subset_indices_train = train_inds
+    subset_indices_valid = validation_inds
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size,
@@ -212,7 +256,7 @@ def main():
     )
 
     # Load your model [fcNet, ConvNet, Net]
-    model = ConvNet().to(device)
+    model = Net().to(device) #ConvNet().to(device)
 
     # Try different optimzers here [Adam, SGD, RMSprop]
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
@@ -224,6 +268,8 @@ def main():
     for epoch in range(1, args.epochs + 1):
         train(args, model, device, train_loader, optimizer, epoch)
         test(model, device, val_loader)
+        print('train accuracy')
+        test(model, device, train_loader)
         scheduler.step()    # learning rate scheduler
 
         # You may optionally save your model at each epoch here
