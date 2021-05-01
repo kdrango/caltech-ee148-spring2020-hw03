@@ -7,6 +7,10 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data.sampler import SubsetRandomSampler
+import numpy as np
+import sklearn
+from matplotlib import pyplot as plt
+from sklearn.metrics import confusion_matrix
 
 import os
 
@@ -84,24 +88,33 @@ class Net(nn.Module):
     '''
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=8, kernel_size=(3,3), stride=1)
-        self.conv2 = nn.Conv2d(8, 8, 3, 1)
-        self.dropout1 = nn.Dropout2d(0.6)
-        self.dropout2 = nn.Dropout2d(0.3)
-        self.fc1 = nn.Linear(200, 88)
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=9, kernel_size=(3,3), stride=1)
+        self.conv2 = nn.Conv2d(9, 9, 3, 1)
+        self.dropout1 = nn.Dropout2d(0.5) # had 0.6
+        self.dropout2 = nn.Dropout2d(0.2) #had 0.3
+        self.fc1 = nn.Linear(225, 88)
         self.fc2 = nn.Linear(88, 10)
-        self.AP = nn.AvgPool2d((3,3), stride = 1)
+        self.Bnorm = nn.BatchNorm2d(9)
         
     def forward(self, x):
         x = self.conv1(x)
+        #print(np.shape(x))
         x = F.relu(x)
-        x = F.max_pool2d(x, 2)
+        #print(np.shape(x))
+        x = F.avg_pool2d(x, 2)
+        #print(np.shape(x))
+        #x = self.Bnorm(x)
         x = self.dropout1(x)
+        #print(np.shape(x))
 
         x = self.conv2(x)
+        #print(np.shape(x))
         x = F.relu(x)
-        x = F.max_pool2d(x, 2)
+        #print(np.shape(x))
+        x = F.avg_pool2d(x, 2)
+        #print(np.shape(x))
         x = self.dropout2(x)
+        #print(np.shape(x))
 
         x = torch.flatten(x, 1)
         x = self.fc1(x)
@@ -111,6 +124,33 @@ class Net(nn.Module):
         output = F.log_softmax(x, dim=1)
         
         return output
+    
+    def features(self, x):
+        x = self.conv1(x)
+        #print(np.shape(x))
+        x = F.relu(x)
+        #print(np.shape(x))
+        x = F.avg_pool2d(x, 2)
+        #print(np.shape(x))
+        #x = self.Bnorm(x)
+        x = self.dropout1(x)
+        #print(np.shape(x))
+
+        x = self.conv2(x)
+        #print(np.shape(x))
+        x = F.relu(x)
+        #print(np.shape(x))
+        x = F.avg_pool2d(x, 2)
+        #print(np.shape(x))
+        x = self.dropout2(x)
+        #print(np.shape(x))
+
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = F.relu(x)
+
+        
+        return x
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
@@ -148,6 +188,48 @@ def test(model, device, test_loader):
 
     test_loss /= test_num
 
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        test_loss, correct, test_num,
+        100. * correct / test_num))
+
+
+#
+def find_err(model, device, test_loader):
+    model.eval()    # Set the model to inference mode
+    test_loss = 0
+    correct = 0
+    test_num = 0
+    confusion = 0
+    with torch.no_grad():   # For the inference step, gradient is not computed
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
+            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
+            
+            # confusion matrix
+            confusion += confusion_matrix(pred, target)
+            
+            #to get failures
+            #ind = 0
+            #for item in pred.eq(target.view_as(pred)):
+                #if not item:
+                    #plt.imshow(data[ind, :, :].reshape(28,28))
+                    #plt.show()
+                #ind += 1
+                
+                
+            test_num += len(data)
+
+    test_loss /= test_num
+    
+    #confusion matrix again
+    print(confusion)
+    plt.imshow(confusion)
+    plt.show()
+    plt.imshow(np.log(confusion))
+    plt.show()
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, test_num,
         100. * correct / test_num))
@@ -197,7 +279,7 @@ def main():
         assert os.path.exists(args.load_model)
 
         # Set the test model
-        model = fcNet().to(device)
+        model = Net().to(device) #fcNet().to(device)
         model.load_state_dict(torch.load(args.load_model))
 
         test_dataset = datasets.MNIST('./data', train=False,
@@ -209,7 +291,7 @@ def main():
         test_loader = torch.utils.data.DataLoader(
             test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
 
-        test(model, device, test_loader)
+        find_err(model, device, test_loader)
 
         return
 
@@ -217,7 +299,7 @@ def main():
     train_dataset = datasets.MNIST('./data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
                     transforms.ToTensor(),           # Add data augmentation here
-                    transforms.RandomPerspective(distortion_scale=0.2, p=0.1, interpolation= 2, fill=0),
+                    transforms.RandomPerspective(distortion_scale=0.2, p=0.1), #, interpolation= 2, fill=0),
                     transforms.Normalize((0.1307,), (0.3081,))
                 ]))
 
@@ -242,9 +324,19 @@ def main():
         num_val = int(len(rand_sort) * p_val)
         validation_inds += rand_sort[:num_val]
         train_inds += rand_sort[num_val:]
-        
-    subset_indices_train = train_inds
-    subset_indices_valid = validation_inds
+    
+    # for all training data
+    #subset_indices_train = train_inds
+    #subset_indices_valid = validation_inds
+    
+    train_inds_shuff = list(SubsetRandomSampler(train_inds))
+    valid_inds_shuff = list(SubsetRandomSampler(validation_inds))
+    
+    # for 1/2, 1/4, 1/8, 1/16 of training data
+    p = 1 #proportion of training data used
+    subset_indices_train = train_inds_shuff[:(int(len(train_inds)*p))]
+    subset_indices_valid = valid_inds_shuff[:(int(len(validation_inds)*p))]
+    
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size,
@@ -280,3 +372,25 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+##  9 learned kernels
+device = torch.device("cpu")
+model = Net().to(device)
+model.state_dict()
+# get weights for first layer
+cv_weights = model.state_dict()['conv1.weight']
+img_arr = np.zeros((9,9))
+image = 0
+for i in range(3):
+    for j in range(3):
+        img_arr[i*3:(i+1)*3, j*3:(j+1)*3] =np.array(cv_weights[image][0][:][:])
+        image += 1
+        
+plt.imshpw(img_arr)
+plt.show()
+        
+
+
+
+
